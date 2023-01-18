@@ -1,5 +1,6 @@
 import time
 import torch
+import pickle
 
 from fuzzywuzzy import fuzz
 from transformers import AutoTokenizer, BertForMaskedLM
@@ -13,6 +14,7 @@ class SpellChecker():
         self, multiprocess_num=3, edit_distance=False, parsbert=False,
         mbert=False, persian_bigbird=False, topk=50,
     ):
+        self.__load_words()
         self.topk = topk
         self.edit_distance = edit_distance
         self.multiprocess_num = multiprocess_num
@@ -37,6 +39,10 @@ class SpellChecker():
                 "model": self.parsbert_model,
                 "tokenizer": self.parsbert_tokenizer,
             }
+
+    def __load_words(self):
+        with open("../assets/words.pickle", "rb") as f:
+            self.words = [word for word in pickle.load(f)]
             
     def get_editdistance_suggestions(self, tokens, misspelled_token):
         similarities = []
