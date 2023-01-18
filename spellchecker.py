@@ -1,20 +1,27 @@
 import time
 import torch
+import pickle
 from transformers import AutoTokenizer, BertForMaskedLM
 from transformers import pipeline, AutoTokenizer, AutoModelWithLMHead
 from torch.multiprocessing import Pool, Process, set_start_method
 set_start_method("spawn", force=True)
+from nltk import edit_distance
 
 class SpellChecker():
     
     def __init__(self, multiprocess_num=3):
+        self.__load_words()
         self.multiprocess_num = multiprocess_num
         self.model_name = 'HooshvareLab/bert-base-parsbert-uncased'
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelWithLMHead.from_pretrained(self.model_name)
         # self.model_name = 'SajjadAyoubi/distil-bigbird-fa-zwnj'
         # self.fill = pipeline('fill-mask', model=self.model_name, tokenizer=self.model_name, device=-1)
-        
+
+    def __load_words(self):
+        with open("./assets/words.pickle", "rb") as f:
+            self.words = [word for word in pickle.load(f)]
+
     def get_suggested_token(self, sequence, target_token):
         input_ids = self.tokenizer.encode(sequence, return_tensors="pt")
         mask_token_index = torch.where(input_ids == self.tokenizer.mask_token_id)[1]
@@ -45,6 +52,17 @@ class SpellChecker():
         suggested_token = self.get_suggested_token(masked_str, self.tokens[token_index])
         return suggested_token
 
+    def do_spellchecking_by_edit_distance(self,token_index):
+        current_word = self.tokens[token_index]
+        min = 100
+        for word in self.words:
+            edit_dist = edit_distance(current_word, word)
+            if edit_dist < min:
+                min = edit_dist
+                suggested_token = word
+
+        return suggested_token
+
     def do_spellcheking_serially(self, query):
         self.tokens = query.split(" ")
         tokens_indexes = [i for i in range(len(self.tokens))]
@@ -56,7 +74,8 @@ class SpellChecker():
         self.tokens = query.split(" ")
         tokens_indexes = [i for i in range(len(self.tokens))]
         multi_pool = Pool(processes=self.multiprocess_num)
-        predictions = multi_pool.map(self.do_spellcheck, tokens_indexes)
+        # predictions = multi_pool.map(self.do_spellcheck, tokens_indexes)
+        predictions = multi_pool.map(self.do_spellchecking_by_edit_distance, tokens_indexes)
         multi_pool.close()
         multi_pool.join()
         return ' '.join(predictions)
@@ -66,7 +85,8 @@ if __name__ == "__main__":
 
     spellchecker = SpellChecker(multiprocess_num=4)
     t1 = time.time()
-    res = spellchecker.do_spellcheking_serially("پس از سال‌ها تلاش رازی موفق به کسف الکل شد. این دانشمند تیرانی باعث افتخار در تاریخ کور است")
-    # res = spellchecker.do_spellcheking_parallelly("پایتخ ایران تهران است")
-    print(time.time()-t1)
+    # res = spellchecker.do_spellcheking_serially("پس از سال‌ها تلاش رازی موفق به کسف الکل شد. این دانشمند تیرانی باعث افتخار در تاریخ کور است")
+    res = spellchecker.do_spellcheking_parallelly("جایگاه و معموریت شورای‌ عالی انقلاب فرهنگی حدایت فرهنگی است")
+    # print(time.time()-t1)
+    # print(res)
     print(res)
