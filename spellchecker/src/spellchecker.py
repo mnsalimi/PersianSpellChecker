@@ -20,10 +20,24 @@ class SpellChecker():
         self.model_name = 'HooshvareLab/bert-base-parsbert-uncased'
         self.parsbert_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.parsbert_model = AutoModelWithLMHead.from_pretrained(self.model_name)
-        
+
+        self.model_name = 'bert-base-multilingual-cased'
+        self.mbert_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.mbert_model = AutoModelWithLMHead.from_pretrained(self.model_name)
         # self.model_name = 'SajjadAyoubi/distil-bigbird-fa-zwnj'
         # self.fill = pipeline('fill-mask', model=self.model_name, tokenizer=self.model_name, device=-1)
-        
+        self.models = {}
+        if mbert:
+            self.models["mbert"] = {
+                "model": self.mbert_model,
+                "tokenizer": self.mbert_tokenizer,
+            }
+        if parsbert:
+            self.models["parsbert"] = {
+                "model": self.parsbert_model,
+                "tokenizer": self.parsbert_tokenizer,
+            }
+            
     def get_editdistance_suggestions(self, tokens, misspelled_token):
         similarities = []
         for token in tokens:
@@ -34,31 +48,30 @@ class SpellChecker():
             similarities.index(max(similarities))
         ]
 
-    def get_parsbert_suggestions(self, sequence, target_token):
-        input_ids = self.tokenizer.encode(sequence, return_tensors="pt")
-        mask_token_index = torch.where(input_ids == self.tokenizer.mask_token_id)[1]
+    def get_languagemodel_suggestions(self, model, sequence, target_token):
+        input_ids = model["tokenizer"].encode(sequence, return_tensors="pt")
+        mask_token_index = torch.where(input_ids == model["tokenizer"].mask_token_id)[1]
 
-        token_logits = self.model(input_ids)[0]
+        token_logits = model["model"](input_ids)[0]
         mask_token_logits = token_logits[0, mask_token_index, :]
         mask_token_logits = torch.softmax(mask_token_logits, dim=1)
         top_k_list = []
         top_k = torch.topk(mask_token_logits, self.topk, dim=1)
         top_k_tokens = zip(top_k.indices[0].tolist(), top_k.values[0].tolist())
         for token, score in top_k_tokens:
-            print(sequence, self.tokenizer.decode([token]), f"(score: {score})")
-            top_k_list.append((self.tokenizer.decode([token]), score))
+            print(sequence, model["tokenizer"].decode([token]), f"(score: {score})")
+            top_k_list.append((model["tokenizer"].decode([token]), score))
 
-        sought_after_token_id = self.tokenizer.encode(target_token, add_special_tokens=False,)[0]  # 928
+        sought_after_token_id = model["tokenizer"].encode(target_token, add_special_tokens=False,)[0]  # 928
         token_score = mask_token_logits[:, sought_after_token_id]
         target_token_score = mask_token_logits[:, sought_after_token_id][0]
         print(f"Score of {target_token}: {mask_token_logits[:, sought_after_token_id]}")
-        print(target_token_score)
         top_k_dict = {x: y for x, y in top_k_list}
         top_k_token = [x for x, y in top_k_list]
         if target_token in top_k_dict and top_k_token.index(target_token) <= self.topk or\
         target_token in top_k_dict and top_k_dict[target_token] >= 0.002 or\
         target_token_score >= 0.0001:
-            return target_token
+            return [target_token]
         else:
             return top_k_token[:self.topk]
         
@@ -68,12 +81,15 @@ class SpellChecker():
             for i in range(len(self.tokens))
         ]
         masked_str = ' '.join(masked_str)
-        suggested_tokens = self.get_parsbert_suggestions(masked_str, self.tokens[token_index])
-        if type(suggested_tokens) == str:
-            return suggested_tokens
-        if type(suggested_tokens) == list:
-            if self.edit_distance:
-                return self.get_editdistance_suggestions(suggested_tokens, self.tokens[token_index])
+        suggestions = []
+        for model in self.models:
+            suggestions +=\
+                self.get_languagemodel_suggestions(self.models[model], masked_str, self.tokens[token_index])
+        if self.edit_distance:
+            res = self.get_editdistance_suggestions(suggestions, self.tokens[token_index])
+            print("suggestions for editdistance", suggestions)
+            print("editdistance res", res)
+            return res
 
     def do_spellcheking_serially(self, query):
         self.tokens = query.split(" ")
@@ -92,18 +108,31 @@ class SpellChecker():
         return ' '.join(predictions)
 
 def test_cases(input_address, output_address):
-    spellchecker = SpellChecker(multiprocess_num=4, topk=50, edit_distance=True)
+    spellchecker = SpellChecker(
+        multiprocess_num=4,
+        topk=25,
+        parsbert=True,
+        # mbert=True,
+        edit_distance=True,
+    )
     with open(input_address, "r") as f:
-        lines = f.readlines()
+        lines = [line.replace("\n", "").rstrip().lstrip().strip() for line in f.readlines()]
+        lines = [line.split(",") for line in lines]
+        lines = [[line[0], line[1]] for line in lines]
     lines = [
-        "دوستان خود را در صفر بشناسید؟",
+        ("کنکور سراسری از ۵ سال دیگر حرف خواهد شد!", "کنکور سراسری از ۵ سال دیگر حذف خواهد شد!"),
+        ("بحران بی آتی در بسیاری ار شهرهای ایران", "بحران بی آتی در بسیاری ار شهرهای ایران")
+        # ("بارش برق و باران در سراسر کشور تا آخر هفته ادامه دارد", "بارش برق و باران در سراسر کشور تا آخر هفته ادامه دارد"),
     ]
-    for query in lines:
+    # [print(line) for line in lines[1:]]
+    for line in lines[1:]:
+        print("query: {}".format(line[0]))
         t1 = time.time()
-        res = spellchecker.do_spellcheking_serially(lines[0])
+        res = spellchecker.do_spellcheking_serially(line[0])
         # res = spellchecker.do_spellcheking_parallelly("پایتخ ایران تهران است")
         print(time.time()-t1)
-        print(res)
+        print("res: {}".format(res))
+        print()
 
 if __name__ == "__main__":
-    test_cases("testcases.txt", "results.csv")
+    test_cases("testcases.csv", "res.csv")
