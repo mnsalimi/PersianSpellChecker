@@ -6,6 +6,8 @@ from fuzzywuzzy import fuzz
 from transformers import AutoTokenizer, BertForMaskedLM
 from transformers import pipeline, AutoTokenizer, AutoModelWithLMHead
 from torch.multiprocessing import Pool, Process, set_start_method
+from utility import calc_metric
+
 set_start_method("spawn", force=True)
 
 class SpellChecker():
@@ -65,13 +67,12 @@ class SpellChecker():
         top_k = torch.topk(mask_token_logits, self.topk, dim=1)
         top_k_tokens = zip(top_k.indices[0].tolist(), top_k.values[0].tolist())
         for token, score in top_k_tokens:
-            print(sequence, model["tokenizer"].decode([token]), f"(score: {score})")
+            # print(sequence, model["tokenizer"].decode([token]), f"(score: {score})")
             top_k_list.append((model["tokenizer"].decode([token]), score))
-
         sought_after_token_id = model["tokenizer"].encode(target_token, add_special_tokens=False,)[0]  # 928
         token_score = mask_token_logits[:, sought_after_token_id]
         target_token_score = mask_token_logits[:, sought_after_token_id][0]
-        print(f"Score of {target_token}: {mask_token_logits[:, sought_after_token_id]}")
+        # print(f"Score of {target_token}: {mask_token_logits[:, sought_after_token_id]}")
         top_k_dict = {x: y for x, y in top_k_list}
         top_k_token = [x for x, y in top_k_list]
         if target_token in top_k_dict and top_k_token.index(target_token) <= self.topk or\
@@ -93,12 +94,10 @@ class SpellChecker():
                 self.get_languagemodel_suggestions(self.models[model], masked_str, self.tokens[token_index])
         if self.edit_distance:
             res = self.get_editdistance_suggestions(suggestions, self.tokens[token_index])
-            print("suggestions for editdistance", suggestions)
-            print("editdistance res", res)
             return res
 
-    def do_spellcheking_serially(self, query):
-        self.tokens = query.split(" ")
+    def do_spellcheking_serially(self, tokens):
+        self.tokens = tokens
         tokens_indexes = [i for i in range(len(self.tokens))]
         for i in range(len(self.tokens)):
             self.tokens[i] = self.do_spellcheck(i)
@@ -114,6 +113,13 @@ class SpellChecker():
         return ' '.join(predictions)
 
 def test_cases(input_address, output_address):
+
+    with open(input_address, "r") as f:
+        lines = [line.replace("\n", "").rstrip().lstrip().strip() for line in f.readlines()]
+        lines = [line.split(",") for line in lines]
+        lines = [[line[0], line[1]] for line in lines if line is not None and line]
+    lines = lines[:200]
+    print("lines", len(lines))
     spellchecker = SpellChecker(
         multiprocess_num=4,
         topk=25,
@@ -121,24 +127,32 @@ def test_cases(input_address, output_address):
         # mbert=True,
         edit_distance=True,
     )
-    with open(input_address, "r") as f:
-        lines = [line.replace("\n", "").rstrip().lstrip().strip() for line in f.readlines()]
-        lines = [line.split(",") for line in lines]
-        lines = [[line[0], line[1]] for line in lines]
-    lines = [
-        ("کنکور سراسری از ۵ سال دیگر حرف خواهد شد!", "کنکور سراسری از ۵ سال دیگر حذف خواهد شد!"),
-        ("بحران بی آتی در بسیاری ار شهرهای ایران", "بحران بی آتی در بسیاری ار شهرهای ایران")
+    # lines = [
+    #     ("کنکور سراسری از ۵ سال دیگر حرف خواهد شد!", "کنکور سراسری از ۵ سال دیگر حذف خواهد شد!"),
+    #     ("بحران بی آتی در بسیاری ار شهرهای ایران", "بحران بی آتی در بسیاری ار شهرهای ایران")
         # ("بارش برق و باران در سراسر کشور تا آخر هفته ادامه دارد", "بارش برق و باران در سراسر کشور تا آخر هفته ادامه دارد"),
-    ]
+    # ]
     # [print(line) for line in lines[1:]]
-    for line in lines[1:]:
-        print("query: {}".format(line[0]))
+    f1 = 0
+    results = ["predicted"]
+    for line in lines:
+        if line[0] == "query":
+            continue
+        tokens_ = line[0].split(" ")
+        query = line[0].split(" ")
+        tags = line[1].split(" ")
         t1 = time.time()
-        res = spellchecker.do_spellcheking_serially(line[0])
-        # res = spellchecker.do_spellcheking_parallelly("پایتخ ایران تهران است")
+        predicteds = spellchecker.do_spellcheking_serially(tokens_)
         print(time.time()-t1)
-        print("res: {}".format(res))
-        print()
+        results.append(predicteds)
+        predicteds = predicteds.split(" ")
+        f1 += calc_metric(query, tags, predicteds)["f1"]
+        # res = spellchecker.do_spellcheking_parallelly("پایتخ ایران تهران است")
+        # print()
+    with open(output_address, "w") as f:
+        for i in range(0, len(lines)):
+            f.write(lines[i][0]+"\t"+lines[i][1]+"\t"+results[i]+"\n")
+    print(f1/(len(lines)-1))
 
 if __name__ == "__main__":
     test_cases("testcases.csv", "res.csv")

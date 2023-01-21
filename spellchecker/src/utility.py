@@ -4,6 +4,9 @@ def calc_metric(tokens, tags, predicteds):
     recall = 0
     recall_total = 0
     f1 = 0
+    print("tokens", tokens)
+    print("tags", tags)
+    print("predicteds", predicteds)
     for i in range(len(predicteds)):
         if predicteds[i] != tokens[i]:
             precision_total += 1
@@ -13,8 +16,14 @@ def calc_metric(tokens, tags, predicteds):
             recall_total += 1
             if tokens[i] == predicteds[i]:
                 recall += 1
-    precision /= precision_total
-    recall /= recall_total
+    try:
+        precision /= precision_total
+    except:
+        precision = 1
+    try:
+        recall /= recall_total
+    except:
+        recall = 1
     f1 = round(
         float(
             2*precision*recall/(precision+recall)
